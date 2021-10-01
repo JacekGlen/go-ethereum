@@ -17,7 +17,9 @@
 package vm
 
 import (
+	"fmt"
 	"hash"
+	"io"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -25,12 +27,53 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+type InstrumenterLog struct {
+	Pc          uint64 `json:"pc"`
+	Op          OpCode `json:"op"`
+	TimeNs      int64  `json:"timeNs"`
+	TimerTimeNs int64  `json:"timerTimeNs"`
+}
+
+type InstrumenterLogger struct {
+	Logs            []InstrumenterLog
+	StartTime int64
+
+	// worker fields, just to avoid reallocation of local vars
+	OpCodeDuration int64
+	TimerDuration      int64
+	SinceRuntimeNano  int64
+	Log               InstrumenterLog
+}
+
+// NewInstrumenterLogger returns a new logger
+func NewInstrumenterLogger() *InstrumenterLogger {
+	logger := &InstrumenterLogger{}
+	return logger
+}
+
+// WriteTrace writes a formatted trace to the given writer
+func WriteInstrumentation(writer io.Writer, logs []InstrumenterLog) {
+	for _, log := range logs {
+		fmt.Fprintf(writer, "%-16spc=%08d time_ns=%v timer_time_ns=%v", log.Op, log.Pc, log.TimeNs, log.TimerTimeNs)
+		fmt.Fprintln(writer)
+	}
+}
+
+func WriteCSVInstrumentation(writer io.Writer, logs []InstrumenterLog, runId int) {
+	// CSV header must be in sync with these fields here :(, but it's in measurements.py
+	for instructionId, log := range logs {
+		fmt.Fprintf(writer, "%v,%v,%v,%v", runId, instructionId, log.TimeNs, log.TimerTimeNs)
+		fmt.Fprintln(writer)
+	}
+}
+
 // Config are the configuration options for the Interpreter
 type Config struct {
 	Debug                   bool   // Enables debugging
 	Tracer                  Tracer // Opcode logger
-	NoRecursion             bool   // Disables call, callcode, delegate call and create
-	EnablePreimageRecording bool   // Enables recording of SHA3/keccak preimages
+	Instrumenter            *InstrumenterLogger
+	NoRecursion             bool // Disables call, callcode, delegate call and create
+	EnablePreimageRecording bool // Enables recording of SHA3/keccak preimages
 
 	JumpTable [256]*operation // EVM instruction table, automatically populated if unset
 
@@ -206,6 +249,9 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
 	// the execution of one of the operations or until the done flag is set by the
 	// parent context.
+
+	in.cfg.Instrumenter.StartTime = runtimeNano()
+
 	steps := 0
 	for {
 		steps++
@@ -278,6 +324,11 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			mem.Resize(memorySize)
 		}
 
+		if in.cfg.Debug {
+			in.cfg.Tracer.CaptureState(in.evm, pc, op, gasCopy, cost, mem, stack, returns, in.returnData, contract, in.evm.depth, err)
+			logged = true
+		}
+
 		// execute the operation
 		res, err = operation.execute(&pc, in, callContext)
 		// if the operation clears the return data (e.g. it has returning data)
@@ -286,10 +337,21 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			in.returnData = common.CopyBytes(res)
 		}
 
-		if in.cfg.Debug {
-			in.cfg.Tracer.CaptureState(in.evm, pc, op, gasCopy, cost, mem, stack, returns, in.returnData, contract, in.evm.depth, err)
-			logged = true
-		}
+		// measure the current iteration (we'll deduct StartTime below), this stands for EndTime
+		in.cfg.Instrumenter.OpCodeDuration = runtimeNano()
+
+		// take a new measurement to have the timer overhead (we'll deduct OpCodeDuration/EndTime below),
+		// this stands for EndTimerTime
+		in.cfg.Instrumenter.TimerDuration = runtimeNano()
+		in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.OpCodeDuration
+		in.cfg.Instrumenter.OpCodeDuration -= in.cfg.Instrumenter.StartTime
+
+		// add to log
+		in.cfg.Instrumenter.Log = InstrumenterLog{pc, op, in.cfg.Instrumenter.OpCodeDuration, in.cfg.Instrumenter.TimerDuration}
+		in.cfg.Instrumenter.Logs = append(in.cfg.Instrumenter.Logs, in.cfg.Instrumenter.Log)
+
+		// start timing the next iteration
+		in.cfg.Instrumenter.StartTime = runtimeNano()
 
 		switch {
 		case err != nil:
