@@ -39,10 +39,10 @@ type InstrumenterLogger struct {
 	StartTime int64
 
 	// worker fields, just to avoid reallocation of local vars
-	OpCodeDuration int64
-	TimerDuration      int64
-	SinceRuntimeNano  int64
-	Log               InstrumenterLog
+	OpCodeDuration          int64
+	TimerDuration           int64
+	TotalExecutionDuration  int64
+	Log                     InstrumenterLog
 }
 
 // NewInstrumenterLogger returns a new logger
@@ -59,7 +59,12 @@ func WriteInstrumentation(writer io.Writer, logs []InstrumenterLog) {
 	}
 }
 
-func WriteCSVInstrumentation(writer io.Writer, logs []InstrumenterLog, runId int) {
+func WriteCSVInstrumentationTotal(writer io.Writer, instrumenter *InstrumenterLogger, runId int) {
+		fmt.Fprintf(writer, "%v,%v,%v", runId, instrumenter.TotalExecutionDuration, instrumenter.TimerDuration)
+		fmt.Fprintln(writer)
+}
+
+func WriteCSVInstrumentationAll(writer io.Writer, logs []InstrumenterLog, runId int) {
 	// CSV header must be in sync with these fields here :(, but it's in measurements.py
 	for instructionId, log := range logs {
 		fmt.Fprintf(writer, "%v,%v,%v,%v", runId, instructionId, log.TimeNs, log.TimerTimeNs)
