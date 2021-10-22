@@ -342,30 +342,82 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			in.returnData = common.CopyBytes(res)
 		}
 
-		// measure the current iteration (we'll deduct StartTime below), this stands for EndTime
-		in.cfg.Instrumenter.OpCodeDuration = runtimeNano()
-
-		// take a new measurement to have the timer overhead (we'll deduct OpCodeDuration/EndTime below),
-		// this stands for EndTimerTime
-		in.cfg.Instrumenter.TimerDuration = runtimeNano()
-		in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.OpCodeDuration
-		in.cfg.Instrumenter.OpCodeDuration -= in.cfg.Instrumenter.StartTime
-
-		// add to log
-		in.cfg.Instrumenter.Log = InstrumenterLog{pc, op, in.cfg.Instrumenter.OpCodeDuration, in.cfg.Instrumenter.TimerDuration}
-		in.cfg.Instrumenter.Logs = append(in.cfg.Instrumenter.Logs, in.cfg.Instrumenter.Log)
-
-		// start timing the next iteration
-		in.cfg.Instrumenter.StartTime = runtimeNano()
+		// gas-cost-estimator instrumentation for measure_all:
+		// we paste the measurement code into each clause of the switch verbosely
+		// in order to not have to think about function call cost/inlining/optimizations/whatnot.
+		// All returning clauses do the same. The non-returning clause also restarts the timer
 
 		switch {
 		case err != nil:
+			// BEGIN COPY PASTE BLOCK <shame>
+			// measure the current iteration (we'll deduct StartTime below), this stands for EndTime
+			in.cfg.Instrumenter.OpCodeDuration = runtimeNano()
+	
+			// take a new measurement to have the timer overhead (we'll deduct OpCodeDuration/EndTime below),
+			// this stands for EndTimerTime
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.OpCodeDuration
+			in.cfg.Instrumenter.OpCodeDuration -= in.cfg.Instrumenter.StartTime
+	
+			// add to log
+			in.cfg.Instrumenter.Log = InstrumenterLog{pc, op, in.cfg.Instrumenter.OpCodeDuration, in.cfg.Instrumenter.TimerDuration}
+			in.cfg.Instrumenter.Logs = append(in.cfg.Instrumenter.Logs, in.cfg.Instrumenter.Log)
+			// END COPY PASTE BLOCK </shame>
+	
 			return nil, err
 		case operation.reverts:
+			// BEGIN COPY PASTE BLOCK <shame>
+			// measure the current iteration (we'll deduct StartTime below), this stands for EndTime
+			in.cfg.Instrumenter.OpCodeDuration = runtimeNano()
+	
+			// take a new measurement to have the timer overhead (we'll deduct OpCodeDuration/EndTime below),
+			// this stands for EndTimerTime
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.OpCodeDuration
+			in.cfg.Instrumenter.OpCodeDuration -= in.cfg.Instrumenter.StartTime
+	
+			// add to log
+			in.cfg.Instrumenter.Log = InstrumenterLog{pc, op, in.cfg.Instrumenter.OpCodeDuration, in.cfg.Instrumenter.TimerDuration}
+			in.cfg.Instrumenter.Logs = append(in.cfg.Instrumenter.Logs, in.cfg.Instrumenter.Log)
+			// END COPY PASTE BLOCK </shame>
+	
 			return res, ErrExecutionReverted
 		case operation.halts:
+			// BEGIN COPY PASTE BLOCK <shame>
+			// measure the current iteration (we'll deduct StartTime below), this stands for EndTime
+			in.cfg.Instrumenter.OpCodeDuration = runtimeNano()
+	
+			// take a new measurement to have the timer overhead (we'll deduct OpCodeDuration/EndTime below),
+			// this stands for EndTimerTime
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.OpCodeDuration
+			in.cfg.Instrumenter.OpCodeDuration -= in.cfg.Instrumenter.StartTime
+	
+			// add to log
+			in.cfg.Instrumenter.Log = InstrumenterLog{pc, op, in.cfg.Instrumenter.OpCodeDuration, in.cfg.Instrumenter.TimerDuration}
+			in.cfg.Instrumenter.Logs = append(in.cfg.Instrumenter.Logs, in.cfg.Instrumenter.Log)
+			// END COPY PASTE BLOCK </shame>
+	
 			return res, nil
 		case !operation.jumps:
+			// BEGIN COPY PASTE BLOCK <shame>
+			// measure the current iteration (we'll deduct StartTime below), this stands for EndTime
+			in.cfg.Instrumenter.OpCodeDuration = runtimeNano()
+	
+			// take a new measurement to have the timer overhead (we'll deduct OpCodeDuration/EndTime below),
+			// this stands for EndTimerTime
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.OpCodeDuration
+			in.cfg.Instrumenter.OpCodeDuration -= in.cfg.Instrumenter.StartTime
+	
+			// add to log
+			in.cfg.Instrumenter.Log = InstrumenterLog{pc, op, in.cfg.Instrumenter.OpCodeDuration, in.cfg.Instrumenter.TimerDuration}
+			in.cfg.Instrumenter.Logs = append(in.cfg.Instrumenter.Logs, in.cfg.Instrumenter.Log)
+			// END COPY PASTE BLOCK </shame>
+	
+			// start timing the next iteration
+			in.cfg.Instrumenter.StartTime = runtimeNano()
+	
 			pc++
 		}
 	}
