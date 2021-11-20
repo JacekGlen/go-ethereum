@@ -250,6 +250,9 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			}
 		}()
 	}
+  // start timer
+  in.cfg.Instrumenter.StartTime =  runtimeNano()
+
 	// The Interpreter main run loop (contextual). This loop runs until either an
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
 	// the execution of one of the operations or until the done flag is set by the
@@ -341,15 +344,39 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 
 		switch {
 		case err != nil:
+      // BEGIN COPY PASTE BLOCK <shame>
+      in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+      in.cfg.Instrumenter.TimerDuration = runtimeNano()
+      in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+      in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
+      // END COPY PASTE BLOCK </shame>
 			return nil, err
 		case operation.reverts:
+      // BEGIN COPY PASTE BLOCK <shame>
+      in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+      in.cfg.Instrumenter.TimerDuration = runtimeNano()
+      in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+      in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
+      // END COPY PASTE BLOCK </shame>
 			return res, ErrExecutionReverted
 		case operation.halts:
+      // BEGIN COPY PASTE BLOCK <shame>
+      in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+      in.cfg.Instrumenter.TimerDuration = runtimeNano()
+      in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+      in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
+      // END COPY PASTE BLOCK </shame>
 			return res, nil
 		case !operation.jumps:
 			pc++
 		}
 	}
+  // BEGIN COPY PASTE BLOCK <shame>
+  in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+  in.cfg.Instrumenter.TimerDuration = runtimeNano()
+  in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+  in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
+  // END COPY PASTE BLOCK </shame>
 	return nil, nil
 }
 
