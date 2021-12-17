@@ -35,14 +35,14 @@ type InstrumenterLog struct {
 }
 
 type InstrumenterLogger struct {
-	Logs            []InstrumenterLog
+	Logs      []InstrumenterLog
 	StartTime int64
 
 	// worker fields, just to avoid reallocation of local vars
-	OpCodeDuration          int64
-	TimerDuration           int64
-	TotalExecutionDuration  int64
-	Log                     InstrumenterLog
+	OpCodeDuration         int64
+	TimerDuration          int64
+	TotalExecutionDuration int64
+	Log                    InstrumenterLog
 }
 
 // NewInstrumenterLogger returns a new logger
@@ -60,8 +60,8 @@ func WriteInstrumentation(writer io.Writer, logs []InstrumenterLog) {
 }
 
 func WriteCSVInstrumentationTotal(writer io.Writer, instrumenter *InstrumenterLogger, runId int) {
-		fmt.Fprintf(writer, "%v,%v,%v", runId, instrumenter.TotalExecutionDuration, instrumenter.TimerDuration)
-		fmt.Fprintln(writer)
+	fmt.Fprintf(writer, "%v,%v,%v", runId, instrumenter.TotalExecutionDuration, instrumenter.TimerDuration)
+	fmt.Fprintln(writer)
 }
 
 func WriteCSVInstrumentationAll(writer io.Writer, logs []InstrumenterLog, runId int) {
@@ -74,49 +74,24 @@ func WriteCSVInstrumentationAll(writer io.Writer, logs []InstrumenterLog, runId 
 
 // Config are the configuration options for the Interpreter
 type Config struct {
-	Debug                   bool   // Enables debugging
-	Tracer                  Tracer // Opcode logger
+	Debug                   bool      // Enables debugging
+	Tracer                  EVMLogger // Opcode logger
 	Instrumenter            *InstrumenterLogger
 	NoRecursion             bool // Disables call, callcode, delegate call and create
+	NoBaseFee               bool // Forces the EIP-1559 baseFee to 0 (needed for 0 price calls)
 	EnablePreimageRecording bool // Enables recording of SHA3/keccak preimages
 
 	JumpTable [256]*operation // EVM instruction table, automatically populated if unset
 
-	EWASMInterpreter string // External EWASM interpreter options
-	EVMInterpreter   string // External EVM interpreter options
-
 	ExtraEips []int // Additional EIPS that are to be enabled
 }
 
-// Interpreter is used to run Ethereum based contracts and will utilise the
-// passed environment to query external sources for state information.
-// The Interpreter will run the byte code VM based on the passed
-// configuration.
-type Interpreter interface {
-	// Run loops and evaluates the contract's code with the given input data and returns
-	// the return byte-slice and an error if one occurred.
-	Run(contract *Contract, input []byte, static bool) ([]byte, error)
-	// CanRun tells if the contract, passed as an argument, can be
-	// run by the current interpreter. This is meant so that the
-	// caller can do something like:
-	//
-	// ```golang
-	// for _, interpreter := range interpreters {
-	//   if interpreter.CanRun(contract.code) {
-	//     interpreter.Run(contract.code, input)
-	//   }
-	// }
-	// ```
-	CanRun([]byte) bool
-}
-
-// callCtx contains the things that are per-call, such as stack and memory,
+// ScopeContext contains the things that are per-call, such as stack and memory,
 // but not transients like pc and gas
-type callCtx struct {
-	memory   *Memory
-	stack    *Stack
-	rstack   *ReturnStack
-	contract *Contract
+type ScopeContext struct {
+	Memory   *Memory
+	Stack    *Stack
+	Contract *Contract
 }
 
 // keccakState wraps sha3.state. In addition to the usual hash methods, it also supports
@@ -147,8 +122,10 @@ func NewEVMInterpreter(evm *EVM, cfg Config) *EVMInterpreter {
 	if cfg.JumpTable[STOP] == nil {
 		var jt JumpTable
 		switch {
-		case evm.chainRules.IsYoloV2:
-			jt = yoloV2InstructionSet
+		case evm.chainRules.IsLondon:
+			jt = londonInstructionSet
+		case evm.chainRules.IsBerlin:
+			jt = berlinInstructionSet
 		case evm.chainRules.IsIstanbul:
 			jt = istanbulInstructionSet
 		case evm.chainRules.IsConstantinople:
@@ -193,7 +170,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	defer func() { in.evm.depth-- }()
 
 	// Make sure the readOnly is only set if we aren't in readOnly yet.
-	// This makes also sure that the readOnly flag isn't removed for child calls.
+	// This also makes sure that the readOnly flag isn't removed for child calls.
 	if readOnly && !in.readOnly {
 		in.readOnly = true
 		defer func() { in.readOnly = false }()
@@ -209,15 +186,13 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	}
 
 	var (
-		op          OpCode             // current opcode
-		mem         = NewMemory()      // bound memory
-		stack       = newstack()       // local stack
-		returns     = newReturnStack() // local returns stack
-		callContext = &callCtx{
-			memory:   mem,
-			stack:    stack,
-			rstack:   returns,
-			contract: contract,
+		op          OpCode        // current opcode
+		mem         = NewMemory() // bound memory
+		stack       = newstack()  // local stack
+		callContext = &ScopeContext{
+			Memory:   mem,
+			Stack:    stack,
+			Contract: contract,
 		}
 		// For optimisation reason we're using uint64 as the program counter.
 		// It's theoretically possible to go above 2^64. The YP defines the PC
@@ -225,9 +200,9 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		pc   = uint64(0) // program counter
 		cost uint64
 		// copies used by tracer
-		pcCopy  uint64 // needed for the deferred Tracer
-		gasCopy uint64 // for Tracer to log gas remaining before execution
-		logged  bool   // deferred Tracer should ignore already logged steps
+		pcCopy  uint64 // needed for the deferred EVMLogger
+		gasCopy uint64 // for EVMLogger to log gas remaining before execution
+		logged  bool   // deferred EVMLogger should ignore already logged steps
 		res     []byte // result of the opcode execution function
 	)
 	// Don't move this deferrred function, it's placed before the capturestate-deferred method,
@@ -235,7 +210,6 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	// they are returned to the pools
 	defer func() {
 		returnStack(stack)
-		returnRStack(returns)
 	}()
 	contract.Input = input
 
@@ -243,15 +217,15 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		defer func() {
 			if err != nil {
 				if !logged {
-					in.cfg.Tracer.CaptureState(in.evm, pcCopy, op, gasCopy, cost, mem, stack, returns, in.returnData, contract, in.evm.depth, err)
+					in.cfg.Tracer.CaptureState(pcCopy, op, gasCopy, cost, callContext, in.returnData, in.evm.depth, err)
 				} else {
-					in.cfg.Tracer.CaptureFault(in.evm, pcCopy, op, gasCopy, cost, mem, stack, returns, contract, in.evm.depth, err)
+					in.cfg.Tracer.CaptureFault(pcCopy, op, gasCopy, cost, callContext, in.evm.depth, err)
 				}
 			}
 		}()
 	}
-  // start timer
-  in.cfg.Instrumenter.StartTime =  runtimeNano()
+	// start timer
+	in.cfg.Instrumenter.StartTime = runtimeNano()
 
 	// The Interpreter main run loop (contextual). This loop runs until either an
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
@@ -281,7 +255,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		} else if sLen > operation.maxStack {
 			return nil, &ErrStackOverflow{stackLen: sLen, limit: operation.maxStack}
 		}
-		// If the operation is valid, enforce and write restrictions
+		// If the operation is valid, enforce write restrictions
 		if in.readOnly && in.evm.chainRules.IsByzantium {
 			// If the interpreter is operating in readonly mode, make sure no
 			// state-modifying operation is performed. The 3rd stack item
@@ -330,7 +304,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		}
 
 		if in.cfg.Debug {
-			in.cfg.Tracer.CaptureState(in.evm, pc, op, gasCopy, cost, mem, stack, returns, in.returnData, contract, in.evm.depth, err)
+			in.cfg.Tracer.CaptureState(pc, op, gasCopy, cost, callContext, in.returnData, in.evm.depth, err)
 			logged = true
 		}
 
@@ -339,49 +313,43 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		// if the operation clears the return data (e.g. it has returning data)
 		// set the last return to the result of the operation.
 		if operation.returns {
-			in.returnData = common.CopyBytes(res)
+			in.returnData = res
 		}
 
 		switch {
 		case err != nil:
-      // BEGIN COPY PASTE BLOCK <shame>
-      in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
-      in.cfg.Instrumenter.TimerDuration = runtimeNano()
-      in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
-      in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
-      // END COPY PASTE BLOCK </shame>
+			// BEGIN COPY PASTE BLOCK <shame>
+			in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+			in.cfg.Instrumenter.TotalExecutionDuration -= in.cfg.Instrumenter.StartTime
+			// END COPY PASTE BLOCK </shame>
 			return nil, err
 		case operation.reverts:
-      // BEGIN COPY PASTE BLOCK <shame>
-      in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
-      in.cfg.Instrumenter.TimerDuration = runtimeNano()
-      in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
-      in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
-      // END COPY PASTE BLOCK </shame>
+			// BEGIN COPY PASTE BLOCK <shame>
+			in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+			in.cfg.Instrumenter.TotalExecutionDuration -= in.cfg.Instrumenter.StartTime
+			// END COPY PASTE BLOCK </shame>
 			return res, ErrExecutionReverted
 		case operation.halts:
-      // BEGIN COPY PASTE BLOCK <shame>
-      in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
-      in.cfg.Instrumenter.TimerDuration = runtimeNano()
-      in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
-      in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
-      // END COPY PASTE BLOCK </shame>
+			// BEGIN COPY PASTE BLOCK <shame>
+			in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration = runtimeNano()
+			in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+			in.cfg.Instrumenter.TotalExecutionDuration -= in.cfg.Instrumenter.StartTime
+			// END COPY PASTE BLOCK </shame>
 			return res, nil
 		case !operation.jumps:
 			pc++
 		}
 	}
-  // BEGIN COPY PASTE BLOCK <shame>
-  in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
-  in.cfg.Instrumenter.TimerDuration = runtimeNano()
-  in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
-  in.cfg.Instrumenter.TotalExecutionDuration -=  in.cfg.Instrumenter.StartTime
-  // END COPY PASTE BLOCK </shame>
+	// BEGIN COPY PASTE BLOCK <shame>
+	in.cfg.Instrumenter.TotalExecutionDuration = runtimeNano()
+	in.cfg.Instrumenter.TimerDuration = runtimeNano()
+	in.cfg.Instrumenter.TimerDuration -= in.cfg.Instrumenter.TotalExecutionDuration
+	in.cfg.Instrumenter.TotalExecutionDuration -= in.cfg.Instrumenter.StartTime
+	// END COPY PASTE BLOCK </shame>
 	return nil, nil
-}
-
-// CanRun tells if the contract, passed as an argument, can be
-// run by the current interpreter.
-func (in *EVMInterpreter) CanRun(code []byte) bool {
-	return true
 }
