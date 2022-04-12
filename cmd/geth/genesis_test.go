@@ -18,7 +18,6 @@ package main
 
 import (
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -73,8 +72,7 @@ var customGenesisTests = []struct {
 func TestCustomGenesis(t *testing.T) {
 	for i, tt := range customGenesisTests {
 		// Create a temporary data directory to use and inspect later
-		datadir := tmpdir(t)
-		defer os.RemoveAll(datadir)
+		datadir := t.TempDir()
 
 		// Initialize the data directory with the custom genesis block
 		json := filepath.Join(datadir, "genesis.json")
@@ -84,7 +82,7 @@ func TestCustomGenesis(t *testing.T) {
 		runGeth(t, "--datadir", datadir, "init", json).WaitExit()
 
 		// Query the custom genesis block
-		geth := runGeth(t, "--networkid", "1337", "--syncmode=full",
+		geth := runGeth(t, "--networkid", "1337", "--syncmode=full", "--cache", "16",
 			"--datadir", datadir, "--maxpeers", "0", "--port", "0",
 			"--nodiscover", "--nat", "none", "--ipcdisable",
 			"--exec", tt.query, "console")

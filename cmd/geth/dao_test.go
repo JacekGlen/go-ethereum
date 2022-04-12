@@ -19,7 +19,6 @@ package main
 import (
 	"io/ioutil"
 	"math/big"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -106,8 +105,7 @@ func TestDAOForkBlockNewChain(t *testing.T) {
 
 func testDAOForkBlockNewChain(t *testing.T, test int, genesis string, expectBlock *big.Int, expectVote bool) {
 	// Create a temporary data directory to use and inspect later
-	datadir := tmpdir(t)
-	defer os.RemoveAll(datadir)
+	datadir := t.TempDir()
 
 	// Start a Geth instance with the requested flags set and immediately terminate
 	if genesis != "" {
@@ -123,7 +121,7 @@ func testDAOForkBlockNewChain(t *testing.T, test int, genesis string, expectBloc
 	}
 	// Retrieve the DAO config flag from the database
 	path := filepath.Join(datadir, "geth", "chaindata")
-	db, err := rawdb.NewLevelDBDatabase(path, 0, 0, "")
+	db, err := rawdb.NewLevelDBDatabase(path, 0, 0, "", false)
 	if err != nil {
 		t.Fatalf("test %d: failed to open test database: %v", test, err)
 	}
