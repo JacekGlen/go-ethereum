@@ -211,7 +211,7 @@ func outputResults(desc string, sampleId int, r testing.BenchmarkResult) {
 }
 
 func runOverheadBenchmark(sampleSize int) {
-	for i := 0; i < sampleSize; i++ {
+	for i := 1; i <= sampleSize; i++ {
 
 		bytecode = common.Hex2Bytes("00" + bytecodeStore)
 		rEmpty := testing.Benchmark(BenchmarkBytecodeExecutionSerial)
