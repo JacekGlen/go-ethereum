@@ -24,7 +24,7 @@ var result []byte
 var bytecode []byte
 var bytecodeStore string
 
-func BenchmarkBytecodeExecutionSerial(b *testing.B) {
+func BenchmarkBytecodeExecution(b *testing.B) {
 	var calldata []byte
 
 	cfg := new(runtime.Config)
@@ -38,14 +38,7 @@ func BenchmarkBytecodeExecutionSerial(b *testing.B) {
 	// which we'll be using to generate arguments for those OPCODEs.
 	calldata = []byte(strings.Repeat("{", 1<<17))
 
-	// Warm-up. **NOTE** we're keeping tracing on during warm-up, otherwise measurements are off
 	cfg.EVMConfig.Debug = false
-	_, _, errWarmUp := runtime.Execute(bytecode, calldata, cfg)
-
-	if errWarmUp != nil {
-		b.Error()
-		return
-	}
 
 	b.ResetTimer()
 
@@ -60,80 +53,7 @@ func BenchmarkBytecodeExecutionSerial(b *testing.B) {
 		}
 	}
 
-	result = exBytes
-}
-
-func BenchmarkBytecodeExecutionIndividualWithWarmup(b *testing.B) {
-	var calldata []byte
-	var exBytes []byte
-
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-
-		cfg := new(runtime.Config)
-		setDefaults(cfg)
-		// from `github.com/ethereum/go-ethereum/core/vm/runtime/runtime.go:109`
-		cfg.State, _ = state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
-
-		// Initialize some constant calldata of 128KB, 2^17 bytes.
-		// This means, if we offset between 0th and 2^16th byte, we can fetch between 0 and 2^16 bytes (64KB)
-		// In consequence, we need args to memory-copying OPCODEs to be between 0 and 2^16, 2^16 fits in a PUSH3,
-		// which we'll be using to generate arguments for those OPCODEs.
-		calldata = []byte(strings.Repeat("{", 1<<17))
-
-		// Warm-up. **NOTE** we're keeping tracing on during warm-up, otherwise measurements are off
-		cfg.EVMConfig.Debug = false
-
-		b.StartTimer()
-
-		exBytes2, _, err := runtime.Execute(bytecode, calldata, cfg)
-		exBytes = exBytes2
-
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-	}
-
-	result = exBytes
-}
-
-func BenchmarkBytecodeExecutionIndividual(b *testing.B) {
-	var calldata []byte
-	var exBytes []byte
-
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-
-		cfg := new(runtime.Config)
-		setDefaults(cfg)
-		// from `github.com/ethereum/go-ethereum/core/vm/runtime/runtime.go:109`
-		cfg.State, _ = state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
-
-		// Initialize some constant calldata of 128KB, 2^17 bytes.
-		// This means, if we offset between 0th and 2^16th byte, we can fetch between 0 and 2^16 bytes (64KB)
-		// In consequence, we need args to memory-copying OPCODEs to be between 0 and 2^16, 2^16 fits in a PUSH3,
-		// which we'll be using to generate arguments for those OPCODEs.
-		calldata = []byte(strings.Repeat("{", 1<<17))
-
-		// Warm-up. **NOTE** we're keeping tracing on during warm-up, otherwise measurements are off
-		cfg.EVMConfig.Debug = false
-		_, _, errWarmUp := runtime.Execute(bytecode, calldata, cfg)
-
-		if errWarmUp != nil {
-			b.Error()
-			return
-		}
-
-		b.StartTimer()
-
-		exBytes2, _, err := runtime.Execute(bytecode, calldata, cfg)
-		exBytes = exBytes2
-
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-	}
-
+	//prevents compiler optimization, see https://dave.cheney.net/2013/06/30/how-to-write-benchmarks-in-go
 	result = exBytes
 }
 
@@ -189,35 +109,14 @@ func setDefaults(cfg *runtime.Config) {
 	}
 }
 
-func runBenchmark(sampleSize int) {
-
-	bytecode = common.Hex2Bytes(bytecodeStore)
-
-	for i := 0; i < sampleSize; i++ {
-		r1 := testing.Benchmark(BenchmarkBytecodeExecutionSerial)
-		outputResults("BenchmarkBytecodeExecutionSerial", i, r1)
-
-		r2 := testing.Benchmark(BenchmarkBytecodeExecutionIndividualWithWarmup)
-		outputResults("BenchmarkBytecodeExecutionIndividualWithWarmup", i, r2)
-
-		r3 := testing.Benchmark(BenchmarkBytecodeExecutionIndividual)
-		outputResults("BenchmarkBytecodeExecutionIndividual", i, r3)
-	}
-}
-
-func outputResults(desc string, sampleId int, r testing.BenchmarkResult) {
-	fmt.Printf("%s,%d,%v,%v\n", desc, sampleId, r.N, r.NsPerOp())
-	fmt.Printf("%v, %v\n", r.AllocsPerOp(), r.AllocedBytesPerOp())
-}
-
 func runOverheadBenchmark(sampleSize int) {
 	for i := 1; i <= sampleSize; i++ {
 
 		bytecode = common.Hex2Bytes("00" + bytecodeStore)
-		rEmpty := testing.Benchmark(BenchmarkBytecodeExecutionSerial)
+		rEmpty := testing.Benchmark(BenchmarkBytecodeExecution)
 
 		bytecode = common.Hex2Bytes(bytecodeStore)
-		rActual := testing.Benchmark(BenchmarkBytecodeExecutionSerial)
+		rActual := testing.Benchmark(BenchmarkBytecodeExecution)
 
 		outputOverheadResults(i, rEmpty, rActual)
 	}
@@ -225,13 +124,8 @@ func runOverheadBenchmark(sampleSize int) {
 
 func outputOverheadResults(sampleId int, rEmpty testing.BenchmarkResult, rActual testing.BenchmarkResult) {
 	overheadTime := rEmpty.NsPerOp()
-	var executionLoopTime int64 = 0
-	var totalTime int64 = rEmpty.NsPerOp()
-
-	if rActual.NsPerOp() > rEmpty.NsPerOp() {
-		executionLoopTime = rActual.NsPerOp() - rEmpty.NsPerOp()
-		totalTime = rActual.NsPerOp()
-	}
+	var executionLoopTime int64 = rActual.NsPerOp() - rEmpty.NsPerOp()
+	var totalTime int64 = rActual.NsPerOp()
 
 	fmt.Printf("%v,%v,%v,%v,%v,%v,%v\n", sampleId, rActual.N, overheadTime, executionLoopTime, totalTime, rActual.AllocsPerOp(), rActual.AllocedBytesPerOp())
 }
@@ -246,4 +140,9 @@ func main() {
 	sampleSize := *sampleSizePtr
 
 	runOverheadBenchmark(sampleSize)
+
+	//prevents compiler optimization
+	if result != nil {
+		result = nil
+	}
 }
